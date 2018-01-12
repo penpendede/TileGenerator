@@ -22,8 +22,6 @@ import argparse
 
 import mapnik
 
-MULTIPROCESSING = True # True = multiprocessing; False = treading
-
 DEG_TO_RAD = pi / 180.0
 RAD_TO_DEG = 180.0 / pi
 
@@ -317,7 +315,7 @@ class RenderThread:
 
 
 
-def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, num_threads = NUM_THREADS, scale = 1, debug = 0):
+def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, multiprocess, num_threads = NUM_THREADS, scale = 1, debug = 0):
 
     # setup queue to be used as a transfer pipeline to the render processes
     renderQueue = multiprocessing.JoinableQueue(32)
@@ -328,7 +326,7 @@ def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, num_threads = NUM
     renderers = {}
     for i in range(num_threads):
         renderer = RenderThread(writer, mapfile, renderQueue, lock, zooms[1])
-        if MULTIPROCESSING:
+        if multiprocess:
           render_thread = multiprocessing.Process(target = renderer.loop)
         else:
           render_thread = threading.Thread(target = renderer.loop)
@@ -464,6 +462,7 @@ if __name__ == "__main__":
     apg_other.add_argument('--mapfile', help = 'style file for mapnik (default: {0})'.format(mapfile), default = mapfile)
     apg_other.add_argument('--metasize', type = int, help = 'metatile size (default: 16)', default = 16)
     apg_other.add_argument('--threads', type = int, metavar = 'N', help = 'number of threads (default: 2)', default = 2)
+    apg_other.add_argument('--multiprocess', action='store_true', help = 'use multiprocessing instead of treading')
     apg_other.add_argument('--debug', type = int, help = 'print debug information; 0 = off, 1 = info, 2 = debug, 3 = details (default: 0)', default = 0)
 
     options = parser.parse_args()
@@ -475,6 +474,11 @@ if __name__ == "__main__":
 
     mapfile = options.mapfile
 
+    if options.multiprocess:
+        print ('Multiprocess')
+    else:
+        print('Multitread')
+
     print ("Bounding Box: %s" % (options.bbox) )
     print ("Metasize: {}".format(options.metasize) )
     print ("Zoom: {}-{}".format(options.zooms[0], options.zooms[1]) )
@@ -484,19 +488,19 @@ if __name__ == "__main__":
     writerQueue = multiprocessing.JoinableQueue(options.metasize * options.metasize)
 
     # setup a lock for parts that only one process can execute (e.g. access the same file, print to screen)
-    if MULTIPROCESSING:
+    if options.multiprocess:
       lock = multiprocessing.Lock()       # multiprocessing
     else:
       lock = threading.Lock()        # threading
 
     writer = WriterThread(options, writerQueue, lock)
-    if MULTIPROCESSING:
+    if options.multiprocess:
       writer_thread = multiprocessing.Process(target = writer.loop) # multiprocessing
     else:
       writer_thread = threading.Thread(target = writer.loop)        # threading
     writer_thread.start()
 
-    render_tiles(options.bbox, options.zooms, mapfile, options.metasize, writerQueue, lock, num_threads = options.threads, scale = options.scale, debug = options.debug)
+    render_tiles(options.bbox, options.zooms, mapfile, options.metasize, writerQueue, lock, options.multiprocess, num_threads = options.threads, scale = options.scale, debug = options.debug)
 
     writerQueue.put(None)
     # wait for pending rendering jobs to complete
