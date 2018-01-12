@@ -31,9 +31,6 @@ TILE_SIZE = 256
 # amount of pixels the metatile is increased on each edge
 BUF_SIZE = 1024
 
-# Default number of rendering threads to spawn, should be roughly equal to number of CPU cores available
-NUM_THREADS = 1
-
 def limit (a):
     if a < -0.9999:
 	return -0.9999
@@ -315,7 +312,7 @@ class RenderThread:
 
 
 
-def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, multiprocess, num_threads = NUM_THREADS, scale = 1, debug = 0):
+def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, multiprocess, num_threads, scale, debug):
 
     # setup queue to be used as a transfer pipeline to the render processes
     renderQueue = multiprocessing.JoinableQueue(32)
@@ -461,6 +458,7 @@ if __name__ == "__main__":
     apg_other.add_argument('--scale', type = float, help = "scale_factor = 2", default = 1.0)
     apg_other.add_argument('--mapfile', help = 'style file for mapnik (default: {0})'.format(mapfile), default = mapfile)
     apg_other.add_argument('--metasize', type = int, help = 'metatile size (default: 16)', default = 16)
+    apg_other.add_argument('--tilesize', type = int, help = 'tile size (default: 256)', default = 256)
     apg_other.add_argument('--threads', type = int, metavar = 'N', help = 'number of threads (default: 2)', default = 2)
     apg_other.add_argument('--multiprocess', action='store_true', help = 'use multiprocessing instead of treading')
     apg_other.add_argument('--debug', type = int, help = 'print debug information; 0 = off, 1 = info, 2 = debug, 3 = details (default: 0)', default = 0)
@@ -500,7 +498,7 @@ if __name__ == "__main__":
       writer_thread = threading.Thread(target = writer.loop)        # threading
     writer_thread.start()
 
-    render_tiles(options.bbox, options.zooms, mapfile, options.metasize, writerQueue, lock, options.multiprocess, num_threads = options.threads, scale = options.scale, debug = options.debug)
+    render_tiles(options.bbox, options.zooms, mapfile, options.metasize, writerQueue, lock, options.multiprocess, options.threads, options.scale, options.debug)
 
     writerQueue.put(None)
     # wait for pending rendering jobs to complete
