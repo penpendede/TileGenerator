@@ -25,12 +25,6 @@ import mapnik
 DEG_TO_RAD = pi / 180.0
 RAD_TO_DEG = 180.0 / pi
 
-# Map defines
-TILE_SIZE = 256
-
-# amount of pixels the metatile is increased on each edge
-BUF_SIZE = 1024
-
 def limit (a):
     if a < -0.9999:
 	return -0.9999
@@ -117,7 +111,6 @@ class FileWriter:
         fh = open(uri, "wb")
         fh.write(imagestring)
         fh.close()
-#        image.save(uri, 'png256')
 
     def commit(self):
         pass
@@ -183,21 +176,21 @@ class Command:
     write, commit, sum = range(3)
 
 class WriterThread:
-    def __init__(self, options, q, lock):
+    def __init__(self, opts, q, lock):
         self.q = q
         self.lock = lock
-        self.options = options
+        self.opts = opts
         self.tilecounter = {'sum': 0, 'count': 0}
 
     def loop(self):
 
-        if self.options.tiledir:
-            tiledir = self.options.tiledir
+        if self.opts.tiledir:
+            tiledir = self.opts.tiledir
             if not tiledir.endswith('/'):
                 tiledir = tiledir + '/'
             self.writer = FileWriter(tiledir)
-        elif self.options.sqlitedb:
-            self.writer = SQLiteDBWriter(self.options.sqlitedb)
+        elif self.opts.sqlitedb:
+            self.writer = SQLiteDBWriter(self.opts.sqlitedb)
         else:
             self.writer = FileWriter(os.getcwd() + '/tiles')
 
@@ -233,13 +226,15 @@ class WriterThread:
 
 
 class RenderThread:
-    def __init__(self, writer, mapfile, q, lock, maxZoom):
+    def __init__(self, writer, mapfile, tilesize, buffersize, q, lock, maxZoom):
         self.writer = writer
         self.q = q
         self.mapfile = mapfile
+        self.tilesize = tilesize
+        self.buffersize = buffersize
         self.lock = lock
 
-        self.m = mapnik.Map(TILE_SIZE, TILE_SIZE)
+        self.m = mapnik.Map(tilesize, tilesize)
 
         # Load style XML
         mapnik.load_map(self.m, mapfile, True)
@@ -250,10 +245,8 @@ class RenderThread:
 
 
     def render_tile(self, z, scale, p0, p1, metawidth, metaheight, debug):
-        # Calculate pixel positions of bottom-left & top-right
-#        p0 = (x * 256, (y + 1) * 256)
-#        p1 = ((x + 1) * 256, y * 256)
 
+        tilesize = self.tilesize
         # Convert to LatLong (EPSG:4326)
         l0 = self.tileproj.fromPixelToLL(p0, z);
         l1 = self.tileproj.fromPixelToLL(p1, z);
@@ -265,9 +258,9 @@ class RenderThread:
         # Bounding box for the tile
         bbox = mapnik.Box2d(c0.x, c0.y, c1.x, c1.y)
 
-        self.m.resize(metawidth * TILE_SIZE, metaheight * TILE_SIZE)
+        self.m.resize(metawidth * tilesize, metaheight * tilesize)
         self.m.zoom_to_box(bbox)
-        self.m.buffer_size = BUF_SIZE
+        self.m.buffer_size = self.buffersize
 
         if debug >= 2:
           self.lock.acquire()
@@ -275,21 +268,21 @@ class RenderThread:
           self.lock.release()
 
         # Render image with default Agg renderer
-        metaimage = mapnik.Image(metawidth * TILE_SIZE, metaheight * TILE_SIZE)
+        metaimage = mapnik.Image(metawidth * tilesize, metaheight * tilesize)
         mapnik.render(self.m, metaimage, scale)
 
         # save metatile for debug purposes only
-#        metaimage.save("/media/henry/Tools/map/tiles/MyCycleMapHD/" + "%s"%z + "-" + "%s" % (p0[0] / TILE_SIZE) + "-" + "%s" % (p1[1] / TILE_SIZE) + ".png", 'png256')
+#        metaimage.save("/media/henry/Tools/map/tiles/MyCycleMapHD/" + "%s"%z + "-" + "%s" % (p0[0] / tilesize) + "-" + "%s" % (p1[1] / tilesize) + ".png", 'png256')
 
         for my in range(0, metaheight):
           for mx in range(0, metawidth):
-            tile = metaimage.view(mx * TILE_SIZE, my * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+            tile = metaimage.view(mx * tilesize, my * tilesize, tilesize, tilesize)
             if debug >= 3:
               self.lock.acquire()
-              print "Tile: x=", p0[0] / TILE_SIZE + mx, "y=", p1[1] / TILE_SIZE + my, "z=", z
+              print "Tile: x=", p0[0] / tilesize + mx, "y=", p1[1] / tilesize + my, "z=", z
               self.lock.release()
 
-            item = (Command.write, p0[0] / TILE_SIZE + mx, p1[1] / TILE_SIZE + my, z, tile.tostring('png256'))
+            item = (Command.write, p0[0] / tilesize + mx, p1[1] / tilesize + my, z, tile.tostring('png256'))
             self.writer.put(item)
 
         # commit batch if required (SQLite-db)
@@ -310,10 +303,7 @@ class RenderThread:
             self.render_tile(z, scale, p0, p1, metawidth, metaheight, debug)
             self.q.task_done()
 
-
-
-def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, multiprocess, num_threads, scale, debug):
-
+def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, multiprocess, num_threads, scale, tilesize, buffersize, debug):
     # setup queue to be used as a transfer pipeline to the render processes
     renderQueue = multiprocessing.JoinableQueue(32)
 
@@ -322,7 +312,7 @@ def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, multiprocess, num
     # Launch render processes
     renderers = {}
     for i in range(num_threads):
-        renderer = RenderThread(writer, mapfile, renderQueue, lock, zooms[1])
+        renderer = RenderThread(writer, mapfile, tilesize, buffersize, renderQueue, lock, zooms[1])
         if multiprocess:
           render_thread = multiprocessing.Process(target = renderer.loop)
         else:
@@ -352,8 +342,8 @@ def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, multiprocess, num
       metaData[z] = {}
 
       # compute how many tiles need to be rendered at current zoom level
-      tileData[z]['cols'] = int(ceil(px[z][1][0] / TILE_SIZE) - floor(px[z][0][0] / TILE_SIZE))
-      tileData[z]['rows'] = int(ceil(px[z][1][1] / TILE_SIZE) - floor(px[z][0][1] / TILE_SIZE))
+      tileData[z]['cols'] = int(ceil(px[z][1][0] / tilesize) - floor(px[z][0][0] / tilesize))
+      tileData[z]['rows'] = int(ceil(px[z][1][1] / tilesize) - floor(px[z][0][1] / tilesize))
 
       # number of tiles for this zoom level
       tileData[z]['sum'] = tileData[z]['cols'] * tileData[z]['rows']
@@ -416,10 +406,10 @@ def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, multiprocess, num
             metawidth = metaData[z]['width']
 
           # calculate dimensions of current metatile in pixels
-          left   = (int(px[z][0][0] / TILE_SIZE) +  x * metaData[z]['width']) * TILE_SIZE
-          top    = (int(px[z][0][1] / TILE_SIZE) + y * metaData[z]['height']) * TILE_SIZE
-          right  = left + metawidth * TILE_SIZE
-          bottom = top + metaheight * TILE_SIZE
+          left   = (int(px[z][0][0] / tilesize) +  x * metaData[z]['width']) * tilesize
+          top    = (int(px[z][0][1] / tilesize) + y * metaData[z]['height']) * tilesize
+          right  = left + metawidth * tilesize
+          bottom = top + metaheight * tilesize
 
           # create set of current metatile for the render queue
           metatile = (z, scale, (left, bottom), (right, top), metawidth, metaheight, debug)
@@ -437,8 +427,6 @@ def render_tiles(bbox, zooms, mapfile, metasize, writer, lock, multiprocess, num
     renderQueue.join()
     for i in range(num_threads):
         renderers[i].join()
-
-
 
 if __name__ == "__main__":
 
@@ -462,43 +450,44 @@ if __name__ == "__main__":
     apg_other.add_argument('--threads', type = int, metavar = 'N', help = 'number of threads (default: 2)', default = 2)
     apg_other.add_argument('--multiprocess', action='store_true', help = 'use multiprocessing instead of treading')
     apg_other.add_argument('--debug', type = int, help = 'print debug information; 0 = off, 1 = info, 2 = debug, 3 = details (default: 0)', default = 0)
+    apg_other.add_argument('--buffersize', type = int, help = 'amount of pixels the metatile is increased on each edge (default: 1024)', default = 1024)
 
-    options = parser.parse_args()
+    opts = parser.parse_args()
 
     # check for required argument
-    if options.bbox == None:
+    if opts.bbox == None:
         parser.print_help()
         sys.exit()
 
-    mapfile = options.mapfile
+    mapfile = opts.mapfile
 
-    if options.multiprocess:
+    if opts.multiprocess:
         print ('Multiprocess')
     else:
         print('Multitread')
 
-    print ("Bounding Box: %s" % (options.bbox) )
-    print ("Metasize: {}".format(options.metasize) )
-    print ("Zoom: {}-{}".format(options.zooms[0], options.zooms[1]) )
-    print ("Scale: {}\n".format(options.scale) )
+    print ("Bounding Box: %s" % (opts.bbox) )
+    print ("Metasize: {}".format(opts.metasize) )
+    print ("Zoom: {}-{}".format(opts.zooms[0], opts.zooms[1]) )
+    print ("Scale: {}\n".format(opts.scale) )
 
     # setup queue to be used as a transfer pipeline from the render processes to the writer
-    writerQueue = multiprocessing.JoinableQueue(options.metasize * options.metasize)
+    writerQueue = multiprocessing.JoinableQueue(opts.metasize * opts.metasize)
 
     # setup a lock for parts that only one process can execute (e.g. access the same file, print to screen)
-    if options.multiprocess:
+    if opts.multiprocess:
       lock = multiprocessing.Lock()       # multiprocessing
     else:
       lock = threading.Lock()        # threading
 
-    writer = WriterThread(options, writerQueue, lock)
-    if options.multiprocess:
+    writer = WriterThread(opts, writerQueue, lock)
+    if opts.multiprocess:
       writer_thread = multiprocessing.Process(target = writer.loop) # multiprocessing
     else:
       writer_thread = threading.Thread(target = writer.loop)        # threading
     writer_thread.start()
 
-    render_tiles(options.bbox, options.zooms, mapfile, options.metasize, writerQueue, lock, options.multiprocess, options.threads, options.scale, options.debug)
+    render_tiles(opts.bbox, opts.zooms, mapfile, opts.metasize, writerQueue, lock, opts.multiprocess, opts.threads, opts.scale, opts.tilesize, opts.buffersize, opts.debug)
 
     writerQueue.put(None)
     # wait for pending rendering jobs to complete
